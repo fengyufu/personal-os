@@ -1,0 +1,30 @@
+# Personal OS 配置示例
+# 复制为 config.toml 后修改。config.toml 已在 .gitignore 中，不会被提交。
+
+timezone = "Asia/Shanghai"
+
+[work]
+# 到这个时间还没打卡就提醒
+clock_in_remind = "09:30"
+# 上班超过多少小时还没下班就提醒
+max_hours = 9
+
+[screenshot]
+# 每 interval_minutes 分钟自动截图（仅上班期间）
+enabled = true
+interval_minutes = 30
+# 超过这个天数的截图会被自动删除
+keep_days = 30
+# JPEG 压缩质量
+quality = 70
+# 前台窗口标题包含这些关键词时跳过截图（隐私）
+exclude_apps = ["微信", "银行"]
+
+[gist]
+# 只勾 gist 权限的 Personal Access Token，仅存本机
+token = ""
+gist_id = ""
+
+[web]
+# 面板端口，只监听 127.0.0.1
+port = 8765
