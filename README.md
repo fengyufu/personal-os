@@ -1,56 +1,108 @@
 # Personal OS
 
-一个开源的个人工作与生活管理系统。
+一个以 **Windows 主力电脑** 为中心的个人工作系统，核心作用是**提醒我把工作做完**。
 
-解决工作和生活时间混在一起、杂事容易忘、多个 AI 订阅额度浪费、多项目切换后上下文丢失等问题。
+- **上下班打卡**：上班时写「今天三件事」，下班写总结，自动统计工时
+- **任务 / 项目追踪**：到期提醒、项目进度、下一步做什么，切换项目不丢上下文
+- **AI 用量汇总**：多个 AI 账号（Claude / ChatGPT / Gemini / Grok）的额度与用量
+- **本地优先**：SQLite 是本机唯一真实数据源，截图只存本机、绝不上传
 
-## 核心功能
+架构：数据层见 `app/db.py`（9 张表 + `PRAGMA user_version` 迁移），接口见 `app/api.py`，前端见 `app/web/`。
 
-- **上下班打卡**：上班启动仪式 + 下班总结，自动统计当天工作时长
-- **每日工作记录**：记录工作内容、时长、进程
-- **AI 订阅追踪**：记录各 AI 服务的额度与使用情况，估算还能用多久，接近重置时提醒
-- **项目面板**：每个项目保存当前状态、上次进度、下一步，方便快速切换和接续
-- **任务收件箱**：杂事统一收集，避免遗忘
+## 当前进度
 
-## 数据安全设计
+| 里程碑 | 内容 | 状态 |
+|---|---|---|
+| M1 | SQLite 数据层 + REST API + 打卡/任务/项目 CRUD + 最简 Web UI | ✅ 已完成 |
+| M2 | 调度器 + 自动截图 + 托盘 + Windows 通知 + 提醒 | ⬜ 待做 |
+| M3 | AI 账号/额度手动管理 + 自动重置 + 今日页展示 | ⬜ 待做 |
+| M4 | 服务器 agent（Claude Code 解析器）+ Gist 上报 + 主程序汇总 | ⬜ 待做 |
+| M5 | Gist 备份、截图清理、PyInstaller 打包、开机自启 | ⬜ 待做 |
 
-- **代码开源**（本仓库）
-- **个人数据私密**：所有真实数据存在一个**私密 GitHub Gist** 中
-- 网页通过你自己的 Personal Access Token 读写私密 Gist
-- 别人可以看到代码，但看不到你的打卡记录、AI 用量和项目内容
+## 快速开始（M1）
 
-## 快速开始
+环境：Windows 11 + Python 3.11 及以上（Linux / macOS 也能跑，只有截图和托盘是 Windows 专属）。
 
-### 1. 创建私密 Gist
+```bash
+# 1. 安装依赖
+pip install -r requirements.txt
 
-1. 打开 [https://gist.github.com](https://gist.github.com)
-2. 创建一个新的 Gist，文件名建议为 `data.json`
-3. 内容先填一个空对象：`{}`
-4. 选择 **Secret**（私密）
-5. 创建后，复制 Gist ID（URL 最后一串字符，例如 `abc123def456`）
+# 2. 复制配置（可选，不配也能用默认值）
+cp config.example.toml config.toml
 
-### 2. 创建 Personal Access Token
+# 3. 启动
+python -m app.main
+```
 
-1. 打开 GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. 生成新 Token，勾选权限：**gist**
-3. 复制生成的 Token（只显示一次）
+然后打开 <http://127.0.0.1:8765>，就能看到面板。
 
-### 3. 使用
+- 数据落在 `data/personal_os.db`（首次启动自动建表）
+- 接口文档在 <http://127.0.0.1:8765/api/docs>
+- 换端口：改 `config.toml` 里的 `[web] port`，或设环境变量 `PERSONAL_OS_CONFIG` 指向别的配置文件
 
-1. 打开本仓库的网页（或本地打开 `index.html`）
-2. 首次使用时填入：
-   - GitHub Personal Access Token
-   - 私密 Gist ID
-3. 数据会自动同步到你的私密 Gist
+### 换个数据位置
 
-## 部署方式
+```bash
+PERSONAL_OS_DATA_DIR=D:/personal-os-data python -m app.main    # Windows PowerShell 用 $env:PERSONAL_OS_DATA_DIR
+```
 
-- 直接用浏览器打开 `index.html`（本地文件）
-- 或者用任意静态托管（GitHub Pages、Vercel、Netlify 等）
+## M1 验收清单
 
-## 技术说明
+在浏览器里逐条试一遍，全部通过即 M1 达标：
 
-纯前端实现（HTML + JavaScript），数据通过 GitHub API 同步到私密 Gist。
+1. 点左下角「上班打卡」→ 弹窗写三件事 → 左侧变成「上班中」，今日工时开始计时
+2. 在「任务」页添加任务（标题 + 截止日期 + 时间 + 优先级 + 重复），回到「今日」能看到它落在「今天到期 / 逾期 / 高优先级」分组里
+3. 勾选一个**重复任务**（如每天）→ 它不会消失，截止日期自动推到下一次
+4. 「项目」页新建项目 → 拖动进度条、写一条进度日志 → 「今日」页显示进度和「下一步」
+5. 「打卡记录」页选日期 → 能看到当天的打卡时间段、时长、计划与总结
+6. **关掉服务再启动**（Ctrl+C 后重新 `python -m app.main`）→ 数据都还在
+
+## 目录结构
+
+```
+app/                 # 主力电脑程序
+├─ main.py           # 入口：启动 DB + Web 服务
+├─ config.py         # 读取 config.toml
+├─ db.py             # SQLite 连接 + 建表/迁移
+├─ api.py            # FastAPI 路由
+└─ web/              # 前端（原生 HTML/JS，无构建工具）
+tests/               # pytest
+agent/               # 服务器端用量上报（M4）
+docs/                # 架构文档
+```
+
+## 接口一览（M1）
+
+```
+GET    /api/health                  健康检查
+GET    /api/today                   今日汇总（打卡状态 + 任务分组 + 进行中项目）
+POST   /api/clock/in   {plan}       上班打卡
+POST   /api/clock/out  {summary}    下班打卡
+GET    /api/sessions?date=          打卡记录
+GET    /api/screenshots?date=       截图列表（M2 起有数据）
+GET    /shots/<path>                本地截图文件
+CRUD   /api/tasks                   任务（勾选完成时重复任务自动顺延）
+CRUD   /api/projects                项目
+CRUD   /api/projects/{id}/logs      项目进度日志
+```
+
+## 测试
+
+```bash
+python -m pytest
+```
+
+测试全部使用临时数据库，不会碰你的 `data/`。
+
+## 数据安全
+
+- 代码开源，**个人数据私密**：`config.toml`、`data/`、`screenshots/` 都在 `.gitignore` 里
+- Gist Token 只存本机 `config.toml`
+- 截图只存本地 `data/screenshots/`，永不上传云端
+
+## 说明
+
+根目录的 `index.html` 是纯前端 + Gist 的旧原型，M2 完成后删除。
 
 ## License
 

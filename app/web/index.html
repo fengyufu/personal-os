@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Personal OS</title>
+<link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-title">Personal&nbsp;OS</div>
+      <div class="brand-sub" id="clock-now">--:--</div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-tab="today"><span>今日</span><em id="badge-tasks">0</em></button>
+      <button class="nav-item" data-tab="tasks"><span>任务</span></button>
+      <button class="nav-item" data-tab="projects"><span>项目</span></button>
+      <button class="nav-item" data-tab="records"><span>打卡记录</span></button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="punch-state" id="punch-state">未上班</div>
+      <button class="btn btn-primary btn-block" id="btn-punch">上班打卡</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <!-- ================= 今日 ================= -->
+    <section class="view active" id="view-today">
+      <header class="page-head">
+        <div>
+          <h1>今日</h1>
+          <p class="muted" id="today-date">—</p>
+        </div>
+        <div class="stat-group">
+          <div class="stat"><span class="stat-num" id="stat-worked">0h00m</span><span class="stat-label">今日工时</span></div>
+          <div class="stat"><span class="stat-num" id="stat-open">0</span><span class="stat-label">未完成任务</span></div>
+          <div class="stat"><span class="stat-num" id="stat-shots">0</span><span class="stat-label">今日截图</span></div>
+        </div>
+      </header>
+
+      <div class="card" id="card-plan">
+        <div class="card-head"><h2>今天三件事</h2></div>
+        <div class="plan-body" id="plan-body"><p class="muted">还没有上班打卡。</p></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-head"><h2>任务</h2><button class="link" data-jump="tasks">管理全部 →</button></div>
+          <div id="today-tasks"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>进行中的项目</h2><button class="link" data-jump="projects">管理全部 →</button></div>
+          <div id="today-projects"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 任务 ================= -->
+    <section class="view" id="view-tasks">
+      <header class="page-head">
+        <div><h1>任务</h1><p class="muted">带时间的任务到点会弹通知（M2 开启）</p></div>
+        <div class="seg" id="task-filter">
+          <button class="seg-item active" data-filter="open">未完成</button>
+          <button class="seg-item" data-filter="done">已完成</button>
+          <button class="seg-item" data-filter="all">全部</button>
+        </div>
+      </header>
+
+      <div class="card form-card">
+        <div class="form-row">
+          <input id="task-title" class="input grow" placeholder="要做什么？回车直接添加" />
+          <select id="task-project" class="input"></select>
+          <input id="task-date" class="input" type="date" title="截止日期" />
+          <input id="task-time" class="input" type="time" title="截止时间" />
+          <select id="task-priority" class="input" title="优先级">
+            <option value="1">高</option>
+            <option value="2" selected>中</option>
+            <option value="3">低</option>
+          </select>
+          <select id="task-repeat" class="input" title="重复">
+            <option value="none">不重复</option>
+            <option value="daily">每天</option>
+            <option value="weekdays">工作日</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+          </select>
+          <button class="btn btn-primary" id="task-add">添加</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div id="task-list" class="list"></div>
+      </div>
+    </section>
+
+    <!-- ================= 项目 ================= -->
+    <section class="view" id="view-projects">
+      <header class="page-head">
+        <div><h1>项目</h1><p class="muted">超过 3 天没写日志的进行中项目会被提醒（M2 开启）</p></div>
+      </header>
+
+      <div class="card form-card">
+        <div class="form-row">
+          <input id="project-name" class="input grow" placeholder="项目名称" />
+          <input id="project-deadline" class="input" type="date" title="截止日期" />
+          <input id="project-next" class="input grow" placeholder="下一步做什么" />
+          <button class="btn btn-primary" id="project-add">新建项目</button>
+        </div>
+      </div>
+
+      <div id="project-list" class="grid-cards"></div>
+    </section>
+
+    <!-- ================= 打卡记录 ================= -->
+    <section class="view" id="view-records">
+      <header class="page-head">
+        <div><h1>打卡记录</h1><p class="muted">截图只存在本机，不上传云端</p></div>
+        <input id="record-date" class="input" type="date" />
+      </header>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h2>打卡</h2></div><div id="record-sessions" class="list"></div></div>
+        <div class="card"><div class="card-head"><h2>截图时间轴</h2></div><div id="record-shots" class="shots"></div></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 通用输入弹窗：上班写计划、下班写总结都复用它 -->
+<dialog id="dialog">
+  <form method="dialog" class="dialog-form">
+    <h2 id="dialog-title">标题</h2>
+    <textarea id="dialog-input" rows="5" placeholder=""></textarea>
+    <div class="dialog-actions">
+      <button class="btn" value="cancel">取消</button>
+      <button class="btn btn-primary" value="ok" id="dialog-ok">确定</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- 任务编辑弹窗 -->
+<dialog id="task-dialog">
+  <form method="dialog" class="dialog-form" id="task-form">
+    <h2>编辑任务</h2>
+    <input id="edit-title" class="input" placeholder="标题" />
+    <div class="form-row">
+      <input id="edit-date" class="input grow" type="date" title="截止日期" />
+      <input id="edit-time" class="input" type="time" title="截止时间" />
+    </div>
+    <div class="form-row">
+      <select id="edit-project" class="input grow" title="所属项目"></select>
+      <select id="edit-priority" class="input" title="优先级">
+        <option value="1">高</option>
+        <option value="2">中</option>
+        <option value="3">低</option>
+      </select>
+      <select id="edit-repeat" class="input" title="重复">
+        <option value="none">不重复</option>
+        <option value="daily">每天</option>
+        <option value="weekdays">工作日</option>
+        <option value="weekly">每周</option>
+        <option value="monthly">每月</option>
+      </select>
+    </div>
+    <textarea id="edit-notes" class="input" rows="3" placeholder="备注"></textarea>
+    <div class="dialog-actions">
+      <button class="btn" value="cancel">取消</button>
+      <button class="btn btn-primary" value="ok">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>
