@@ -246,3 +246,39 @@ def test_today_shows_active_projects_only(client):
     client.patch(f"/api/projects/{paused['id']}", json={"status": "paused"})
     data = client.get("/api/today").json()
     assert [p["id"] for p in data["projects"]] == [active["id"]]
+
+
+# ---------------------------------------------------------------- 日历
+def test_calendar_expands_repeat_and_deadlines(client):
+    start = TODAY
+    client.post("/api/tasks", json={"title": "日报", "due_date": TODAY_STR, "repeat": "daily"})
+    client.post("/api/tasks", json={"title": "一次性", "due_date": TODAY_STR})
+    client.post("/api/projects", json={"name": "P", "deadline": (TODAY + timedelta(days=3)).isoformat()})
+    client.post("/api/clock/in", json={})
+
+    end = start + timedelta(days=6)
+    data = client.get(f"/api/calendar?start={start}&end={end}").json()
+    days = data["days"]
+
+    first = {t["title"]: t for t in days[TODAY_STR]["tasks"]}
+    assert set(first) == {"日报", "一次性"}
+    assert first["日报"]["virtual"] is False
+    later = days[(TODAY + timedelta(days=2)).isoformat()]["tasks"]
+    assert [t["title"] for t in later] == ["日报"] and later[0]["virtual"] is True
+    assert days[(TODAY + timedelta(days=3)).isoformat()]["deadlines"][0]["name"] == "P"
+    assert TODAY_STR in days and days[TODAY_STR]["minutes"] >= 0
+
+
+def test_calendar_rejects_bad_range(client):
+    assert client.get(f"/api/calendar?start={TODAY}&end={TODAY - timedelta(days=1)}").status_code == 400
+    assert client.get(f"/api/calendar?start={TODAY}&end={TODAY + timedelta(days=90)}").status_code == 400
+
+
+def test_parallel_requests_no_thread_error(client):
+    """并发请求时 yield 依赖跨线程 commit 不能报错（M1 时前端项目页会 500）。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    pid = client.post("/api/projects", json={"name": "P"}).json()["id"]
+    with ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(lambda _: client.get(f"/api/projects/{pid}/logs").status_code, range(40)))
+    assert set(codes) == {200}

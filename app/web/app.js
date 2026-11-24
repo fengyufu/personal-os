@@ -128,6 +128,9 @@ const state = {
   projects: [],
   taskFilter: 'open',
   tab: 'today',
+  calMonth: null,      // Date，当月 1 号
+  calSelected: null,   // YYYY-MM-DD
+  calData: null,
 };
 
 /* ---------------------------------------------------------------- 导航 */
@@ -139,6 +142,7 @@ function switchTab(tab) {
   if (tab === 'projects') loadProjects();
   if (tab === 'records') loadRecords();
   if (tab === 'today') loadToday();
+  if (tab === 'calendar') loadCalendar();
 }
 
 /* ---------------------------------------------------------------- 今日 */
@@ -153,7 +157,12 @@ function renderToday() {
   const data = state.today;
   if (!data) return;
 
-  $('#today-date').textContent = data.date;
+  const d = new Date(`${data.date}T00:00:00`);
+  const week = '日一二三四五六'[d.getDay()];
+  $('#today-date').textContent = `${d.getMonth() + 1} 月 ${d.getDate()} 日 · 星期${week}`;
+  const hour = new Date().getHours();
+  $('#today-greet').textContent = hour < 6 ? '夜深了，早点休息'
+    : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
   $('#stat-worked').textContent = fmtMinutes(data.work.worked_minutes);
   $('#stat-open').textContent = String(data.tasks.open_count);
   $('#stat-shots').textContent = String(data.screenshots.count);
@@ -521,12 +530,135 @@ async function loadRecords() {
   });
 }
 
+/* ---------------------------------------------------------------- 日历 */
+function ymd(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/* 月视图固定 6 行，从当月 1 号所在周的周一开始 */
+function calRange(month) {
+  const first = new Date(month.getFullYear(), month.getMonth(), 1);
+  const offset = (first.getDay() + 6) % 7;
+  const start = new Date(first);
+  start.setDate(first.getDate() - offset);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 41);
+  return [start, end];
+}
+
+async function loadCalendar() {
+  if (!state.calMonth) {
+    const now = new Date();
+    state.calMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  if (!state.calSelected) state.calSelected = todayStr();
+  const [start, end] = calRange(state.calMonth);
+  await guard(async () => {
+    state.calData = await call('GET', `/api/calendar?start=${ymd(start)}&end=${ymd(end)}`);
+    renderCalendar();
+  });
+}
+
+function renderCalendar() {
+  const month = state.calMonth;
+  const [start] = calRange(month);
+  const days = state.calData?.days || {};
+  const today = todayStr();
+  $('#cal-title').textContent = `${month.getFullYear()} 年 ${month.getMonth() + 1} 月`;
+
+  const cells = [];
+  for (let i = 0; i < 42; i += 1) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const key = ymd(d);
+    const info = days[key] || { tasks: [], deadlines: [], minutes: 0 };
+    // 工时热力：10 小时封顶
+    const heat = info.minutes ? Math.min(0.32, 0.06 + (info.minutes / 600) * 0.26) : 0;
+    const pills = [
+      ...info.deadlines.map((p) => `<div class="pill dl" title="项目截止">⚑ ${esc(p.name)}</div>`),
+      ...info.tasks.map((t) => {
+        const late = !t.done && !t.virtual && key < today;
+        const cls = ['pill', `p${t.priority}`, t.done && 'done', t.virtual && 'virtual', late && 'late']
+          .filter(Boolean).join(' ');
+        return `<div class="${cls}" title="${esc(t.title)}">${t.due_time ? `${t.due_time} ` : ''}${esc(t.title)}</div>`;
+      }),
+    ];
+    const shown = pills.slice(0, 3).join('');
+    const more = pills.length > 3 ? `<div class="cal-more">还有 ${pills.length - 3} 项</div>` : '';
+    const cls = ['cal-day',
+      d.getMonth() !== month.getMonth() && 'out',
+      key === today && 'today',
+      key === state.calSelected && 'sel',
+      (d.getDay() === 0 || d.getDay() === 6) && 'we'].filter(Boolean).join(' ');
+    cells.push(`
+      <div class="${cls}" data-date="${key}" style="--heat-a:${heat}">
+        <div class="cal-day-top">
+          <span class="cal-num">${d.getDate()}</span>
+          ${info.minutes ? `<span class="cal-hours">${fmtMinutes(info.minutes)}</span>` : ''}
+        </div>
+        ${shown}${more}
+      </div>`);
+  }
+  $('#cal-grid').innerHTML = cells.join('');
+  renderCalSide();
+}
+
+function renderCalSide() {
+  const key = state.calSelected;
+  const info = state.calData?.days?.[key] || { tasks: [], deadlines: [], minutes: 0, shots: 0 };
+  const d = new Date(`${key}T00:00:00`);
+  $('#cal-side-title').textContent = `${d.getMonth() + 1} 月 ${d.getDate()} 日 · 星期${'日一二三四五六'[d.getDay()]}`;
+  $('#cal-side-sub').textContent = key === todayStr() ? '今天' : '';
+
+  const real = info.tasks.filter((t) => !t.virtual);
+  const virtual = info.tasks.filter((t) => t.virtual);
+  const parts = [];
+  parts.push(`
+    <div class="side-section">
+      <div class="side-kv"><span>工时</span><span>${info.minutes ? fmtMinutes(info.minutes) : '—'}</span></div>
+      <div class="side-kv"><span>截图</span><span>${info.shots || 0} 张</span></div>
+    </div>`);
+  if (info.deadlines.length) {
+    parts.push(`<div class="side-section"><div class="group-label">项目截止</div>${info.deadlines.map((p) => `
+      <div class="row"><div class="row-main"><span class="row-title">⚑ ${esc(p.name)}</span>
+      <div class="progress"><i style="width:${p.progress}%"></i></div></div></div>`).join('')}</div>`);
+  }
+  parts.push(`<div class="side-section"><div class="group-label">任务 · ${real.length}</div>${
+    real.length ? real.map((t) => taskRow(t)).join('') : '<div class="empty">这天没有任务</div>'}</div>`);
+  if (virtual.length) {
+    parts.push(`<div class="side-section"><div class="group-label">重复任务（到时会出现）</div>${
+      virtual.map((t) => `<div class="row"><div class="row-main"><span class="row-title">${esc(t.title)}</span>
+        <div class="row-meta"><span class="tag">${REPEAT_LABEL[t.repeat] || ''}</span></div></div></div>`).join('')}</div>`);
+  }
+  $('#cal-side-body').innerHTML = parts.join('');
+}
+
+function shiftMonth(delta) {
+  const m = state.calMonth;
+  state.calMonth = new Date(m.getFullYear(), m.getMonth() + delta, 1);
+  loadCalendar();
+}
+
+async function addCalTask() {
+  const input = $('#cal-add-input');
+  const title = input.value.trim();
+  if (!title) return;
+  await guard(async () => {
+    await call('POST', '/api/tasks', { title, due_date: state.calSelected });
+    input.value = '';
+    await refreshAll();
+    toast('已加到这一天');
+  });
+}
+
 /* ---------------------------------------------------------------- 汇总刷新 */
 async function refreshAll() {
   await loadProjects();
   await loadTasks();
   await loadToday();
   if (state.tab === 'records') loadRecords();
+  if (state.tab === 'calendar') loadCalendar();
 }
 
 /* ---------------------------------------------------------------- 启动 */
@@ -563,6 +695,24 @@ async function boot() {
 
   bindTaskActions($('#task-list'));
   bindTaskActions($('#today-tasks'));
+  bindTaskActions($('#cal-side-body'));
+
+  $('#cal-prev').addEventListener('click', () => shiftMonth(-1));
+  $('#cal-next').addEventListener('click', () => shiftMonth(1));
+  $('#cal-today').addEventListener('click', () => {
+    const now = new Date();
+    state.calMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    state.calSelected = todayStr();
+    loadCalendar();
+  });
+  $('#cal-grid').addEventListener('click', (event) => {
+    const cell = event.target.closest('.cal-day');
+    if (!cell) return;
+    state.calSelected = cell.dataset.date;
+    $$('.cal-day').forEach((el) => el.classList.toggle('sel', el === cell));
+    renderCalSide();
+  });
+  $('#cal-add-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') addCalTask(); });
   bindProjectActions();
 
   $('#record-date').value = todayStr();

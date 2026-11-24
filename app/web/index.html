@@ -16,6 +16,7 @@
 
     <nav class="nav" id="nav">
       <button class="nav-item active" data-tab="today"><span>今日</span><em id="badge-tasks">0</em></button>
+      <button class="nav-item" data-tab="calendar"><span>日历</span></button>
       <button class="nav-item" data-tab="tasks"><span>任务</span></button>
       <button class="nav-item" data-tab="projects"><span>项目</span></button>
       <button class="nav-item" data-tab="records"><span>打卡记录</span></button>
@@ -32,8 +33,8 @@
     <section class="view active" id="view-today">
       <header class="page-head">
         <div>
-          <h1>今日</h1>
-          <p class="muted" id="today-date">—</p>
+          <p class="eyebrow" id="today-date">—</p>
+          <h1 id="today-greet">今日</h1>
         </div>
         <div class="stat-group">
           <div class="stat"><span class="stat-num" id="stat-worked">0h00m</span><span class="stat-label">今日工时</span></div>
@@ -56,6 +57,39 @@
           <div class="card-head"><h2>进行中的项目</h2><button class="link" data-jump="projects">管理全部 →</button></div>
           <div id="today-projects"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ================= 日历 ================= -->
+    <section class="view" id="view-calendar">
+      <header class="page-head">
+        <div><p class="eyebrow">日历</p><h1 id="cal-title">—</h1></div>
+        <div class="cal-nav">
+          <button class="btn" id="cal-prev" title="上个月">‹</button>
+          <button class="btn" id="cal-today">今天</button>
+          <button class="btn" id="cal-next" title="下个月">›</button>
+        </div>
+      </header>
+      <div class="cal-layout">
+        <div class="card cal-card">
+          <div class="cal-week">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span class="we">六</span><span class="we">日</span>
+          </div>
+          <div class="cal-grid" id="cal-grid"></div>
+          <div class="cal-legend">
+            <span><i class="lg-work"></i>工时越长底色越深</span>
+            <span><i class="lg-p1"></i>高优先级</span>
+            <span><i class="lg-dl"></i>项目截止</span>
+            <span><i class="lg-rep"></i>重复任务</span>
+          </div>
+        </div>
+        <aside class="card cal-side" id="cal-side">
+          <div class="card-head"><h2 id="cal-side-title">—</h2><span class="muted" id="cal-side-sub"></span></div>
+          <div id="cal-side-body"></div>
+          <div class="log-add">
+            <input class="input grow" id="cal-add-input" placeholder="给这天加个任务，回车" />
+          </div>
+        </aside>
       </div>
     </section>
 

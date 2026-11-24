@@ -571,6 +571,63 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
             raise HTTPException(status_code=404, detail="日志不属于该项目")
         dbm.delete(conn, "project_logs", log_id)
 
+    # ------------------------------------------------------------ 日历
+    @app.get("/api/calendar", tags=["日历"])
+    def calendar_view(
+        start: date_cls = Query(description="起始日期（含）"),
+        end: date_cls = Query(description="结束日期（含），最多 62 天"),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ) -> dict[str, Any]:
+        """按天汇总：任务（含重复任务的后续日期）、项目截止日、打卡时长、截图数。"""
+        if end < start or (end - start).days > 62:
+            raise HTTPException(status_code=400, detail="日期范围无效（最多 62 天）")
+        s, e = start.isoformat(), end.isoformat()
+        days: dict[str, dict[str, Any]] = {}
+
+        def day(d: str) -> dict[str, Any]:
+            return days.setdefault(
+                d, {"tasks": [], "deadlines": [], "minutes": 0, "shots": 0}
+            )
+
+        # 任务：未完成的按 due_date；重复任务往后展开（标记 virtual，不可直接勾选）
+        for t in dbm.all_(conn, "SELECT * FROM tasks WHERE due_date IS NOT NULL ORDER BY due_time, priority"):
+            t = _task_out(t)
+            if t["done"]:
+                if s <= t["due_date"] <= e:
+                    day(t["due_date"])["tasks"].append(t)
+                continue
+            due = t["due_date"]
+            first = True
+            while due and due <= e:
+                if due >= s:
+                    day(due)["tasks"].append({**t, "due_date": due, "virtual": not first})
+                if t["repeat"] == "none":
+                    break
+                due = advance_due(due, t["repeat"])
+                first = False
+
+        for p in dbm.all_(
+            conn,
+            "SELECT id, name, status, progress, deadline FROM projects WHERE deadline BETWEEN ? AND ?",
+            (s, e),
+        ):
+            day(p["deadline"])["deadlines"].append(p)
+
+        for sess in dbm.all_(
+            conn, "SELECT * FROM work_sessions WHERE date BETWEEN ? AND ?", (s, e)
+        ):
+            day(sess["date"])["minutes"] += _session_minutes(sess)
+
+        for row in dbm.all_(
+            conn,
+            """SELECT substr(taken_at, 1, 10) AS d, COUNT(*) AS n FROM screenshots
+               WHERE taken_at >= ? AND taken_at < ? GROUP BY d""",
+            (f"{s}T00:00:00", f"{(end + timedelta(days=1)).isoformat()}T00:00:00"),
+        ):
+            day(row["d"])["shots"] = row["n"]
+
+        return {"start": s, "end": e, "days": days}
+
     # ------------------------------------------------------------ 前端静态文件
     web_dir = Path(__file__).resolve().parent / "web"
     if web_dir.is_dir():
