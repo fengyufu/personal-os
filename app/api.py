@@ -256,7 +256,12 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
         sessions = dbm.all_(
             conn, "SELECT * FROM work_sessions WHERE date = ? ORDER BY clock_in", (day,)
         )
-        open_session = next((s for s in sessions if not s.get("clock_out")), None)
+        # 进行中的 session 可能是昨天开始的（跨零点），单独查
+        open_session = dbm.one(
+            conn, "SELECT * FROM work_sessions WHERE clock_out IS NULL ORDER BY clock_in DESC"
+        )
+        if open_session and open_session["date"] != day:
+            sessions = [open_session, *sessions]
         worked = sum(_session_minutes(s) for s in sessions)
 
         # 任务分组：逾期 / 今天到期 / 高优先级（未在上一组里出现过的）
@@ -318,9 +323,8 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     def clock_in(body: ClockIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """上班打卡：创建一段 work_session，记录「今天三件事」。"""
         day = dbm.today_str()
-        running = dbm.one(
-            conn, "SELECT * FROM work_sessions WHERE date = ? AND clock_out IS NULL", (day,)
-        )
+        # 不按日期过滤：昨晚没下班的 session 也算进行中，避免跨零点后重复上班
+        running = dbm.one(conn, "SELECT * FROM work_sessions WHERE clock_out IS NULL")
         if running:
             raise HTTPException(status_code=409, detail="今天已经上班打卡了，先下班再重新上班")
 
@@ -334,11 +338,10 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     @app.post("/api/clock/out", tags=["打卡"])
     def clock_out(body: ClockOut, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """下班打卡：结束当前未关闭的 session，写入总结。"""
-        day = dbm.today_str()
+        # 不按日期过滤：支持跨零点下班（如 22:00 上班、次日 01:00 下班）
         running = dbm.one(
             conn,
-            "SELECT * FROM work_sessions WHERE date = ? AND clock_out IS NULL ORDER BY clock_in DESC",
-            (day,),
+            "SELECT * FROM work_sessions WHERE clock_out IS NULL ORDER BY clock_in DESC",
         )
         if not running:
             raise HTTPException(status_code=409, detail="当前没有进行中的打卡，请先上班打卡")
@@ -392,7 +395,7 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
         """按相对路径返回本地截图；路径必须落在 screenshots/ 内。"""
         base = Path(app.state.config.screenshots_dir).resolve()
         target = (base / rel_path).resolve()
-        if not str(target).startswith(str(base)) or not target.is_file():
+        if not target.is_relative_to(base) or not target.is_file():
             raise HTTPException(status_code=404, detail="截图不存在")
         return FileResponse(target)
 

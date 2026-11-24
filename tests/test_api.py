@@ -53,6 +53,36 @@ def test_clock_out_without_clock_in_conflicts(client):
     assert resp.status_code == 409
 
 
+def test_clock_out_across_midnight(client, db_path):
+    """昨晚上班、过了零点再下班：要能正常下班，且今日页显示为上班中。"""
+    import sqlite3
+
+    client.post("/api/clock/in", json={"plan": "通宵"})
+    yesterday = (TODAY - timedelta(days=1)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE work_sessions SET date = ?, clock_in = ?", (yesterday, f"{yesterday}T22:00:00")
+        )
+
+    today = client.get("/api/today").json()
+    assert today["work"]["clocked_in"] is True
+    assert client.post("/api/clock/in", json={}).status_code == 409
+
+    out = client.post("/api/clock/out", json={"summary": "收工"})
+    assert out.status_code == 200
+    assert out.json()["worked_minutes"] >= 120
+
+
+def test_shots_rejects_sibling_dir(client, config):
+    """screenshots_evil/ 这类前缀相同的目录不能被读到。"""
+    evil = config.screenshots_dir.parent / (config.screenshots_dir.name + "_evil")
+    evil.mkdir(parents=True)
+    (evil / "x.png").write_bytes(b"x")
+    config.screenshots_dir.mkdir(parents=True, exist_ok=True)
+    resp = client.get(f"/shots/../{evil.name}/x.png")
+    assert resp.status_code == 404
+
+
 def test_sessions_by_date(client):
     client.post("/api/clock/in", json={"plan": "a"})
     client.post("/api/clock/out", json={"summary": "b"})
