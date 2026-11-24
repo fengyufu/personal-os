@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal OS</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif; }
+</style>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+
+<div class="max-w-4xl mx-auto p-4 md:p-6">
+  <header class="mb-6 flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-bold">Personal OS</h1>
+      <p class="text-zinc-400 text-sm">个人工作与生活管理系统</p>
+    </div>
+    <button onclick="showSettings()" class="text-sm text-zinc-400 hover:text-white">设置</button>
+  </header>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+    <div class="bg-zinc-900 rounded-xl p-6 w-full max-w-md border border-zinc-700">
+      <h2 class="text-lg font-semibold mb-4">GitHub 同步设置</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-zinc-400">Personal Access Token（gist 权限）</label>
+          <input id="token" type="password" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm mt-1" placeholder="ghp_...">
+        </div>
+        <div>
+          <label class="text-xs text-zinc-400">私密 Gist ID</label>
+          <input id="gist-id" class="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm mt-1" placeholder="从 Gist URL 复制">
+        </div>
+      </div>
+      <div class="flex gap-2 mt-5">
+        <button onclick="saveSettings()" class="flex-1 bg-blue-600 hover:bg-blue-700 py-2 rounded text-sm">保存并同步</button>
+        <button onclick="hideSettings()" class="px-4 py-2 text-sm text-zinc-400">取消</button>
+      </div>
+      <p class="text-xs text-zinc-500 mt-3">Token 仅保存在你的浏览器本地，不会上传。</p>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex border-b border-zinc-800 mb-6 overflow-x-auto text-sm">
+    <button onclick="switchTab('dashboard')" id="tab-dashboard" class="px-4 py-2 font-medium border-b-2 border-blue-500">今日</button>
+    <button onclick="switchTab('clock')" id="tab-clock" class="px-4 py-2 text-zinc-400">打卡</button>
+    <button onclick="switchTab('ai')" id="tab-ai" class="px-4 py-2 text-zinc-400">AI 追踪</button>
+    <button onclick="switchTab('projects')" id="tab-projects" class="px-4 py-2 text-zinc-400">项目</button>
+    <button onclick="switchTab('tasks')" id="tab-tasks" class="px-4 py-2 text-zinc-400">任务</button>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="page-dashboard" class="space-y-4">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+        <div class="text-xs text-zinc-400">今日状态</div>
+        <div id="dash-clock" class="mt-1 font-medium">未打卡</div>
+      </div>
+      <div class="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+        <div class="text-xs text-zinc-400">AI 提醒</div>
+        <div id="dash-ai" class="mt-1 text-sm">—</div>
+      </div>
+      <div class="bg-zinc-900 rounded-xl p-4 border border-zinc-800">
+        <div class="text-xs text-zinc-400">进行中项目</div>
+        <div id="dash-projects" class="mt-1 text-sm">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Clock -->
+  <div id="page-clock" class="hidden space-y-4">
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+      <div id="clock-status" class="text-lg font-medium mb-4">当前未打卡</div>
+      <div class="flex gap-3">
+        <button onclick="clockIn()" class="bg-green-600 hover:bg-green-700 px-5 py-2 rounded-lg text-sm">上班打卡</button>
+        <button onclick="clockOut()" class="bg-red-600 hover:bg-red-700 px-5 py-2 rounded-lg text-sm">下班打卡</button>
+      </div>
+      <textarea id="clock-summary" placeholder="下班总结（今天做了什么）" class="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm mt-4" rows="3"></textarea>
+    </div>
+  </div>
+
+  <!-- AI -->
+  <div id="page-ai" class="hidden space-y-4">
+    <div class="flex gap-2 flex-wrap">
+      <input id="ai-name" placeholder="服务名称" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm w-32">
+      <input id="ai-total" type="number" placeholder="总额度" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm w-24">
+      <input id="ai-used" type="number" placeholder="已用" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm w-24">
+      <input id="ai-reset" type="date" class="bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm">
+      <button onclick="addAI()" class="bg-blue-600 px-4 py-2 rounded text-sm">添加</button>
+    </div>
+    <div id="ai-list" class="space-y-3"></div>
+  </div>
+
+  <!-- Projects -->
+  <div id="page-projects" class="hidden space-y-4">
+    <div class="flex gap-2">
+      <input id="proj-name" placeholder="项目名称" class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm">
+      <button onclick="addProject()" class="bg-blue-600 px-4 py-2 rounded text-sm">新建</button>
+    </div>
+    <div id="project-list" class="space-y-3"></div>
+  </div>
+
+  <!-- Tasks -->
+  <div id="page-tasks" class="hidden space-y-4">
+    <div class="flex gap-2">
+      <input id="task-input" placeholder="添加任务或杂事" class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm">
+      <button onclick="addTask()" class="bg-blue-600 px-4 py-2 rounded text-sm">添加</button>
+    </div>
+    <div id="task-list" class="space-y-2"></div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = "personal_os_settings";
+
+let data = {
+  clock: { in: null, out: null, summary: "" },
+  daily_logs: [],
+  ai_subscriptions: [],
+  projects: [],
+  tasks: []
+};
+
+function getSettings() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; }
+}
+function saveSettingsLocal(s) { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+
+function showSettings() { document.getElementById("settings-modal").classList.remove("hidden"); }
+function hideSettings() { document.getElementById("settings-modal").classList.add("hidden"); }
+
+async function saveSettings() {
+  const token = document.getElementById("token").value.trim();
+  const gistId = document.getElementById("gist-id").value.trim();
+  if (!token || !gistId) return alert("请填写 Token 和 Gist ID");
+  saveSettingsLocal({ token, gistId });
+  hideSettings();
+  await syncFromGist();
+  renderAll();
+}
+
+async function syncFromGist() {
+  const { token, gistId } = getSettings();
+  if (!token || !gistId) return;
+  try {
+    const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json" }
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const gist = await res.json();
+    const file = Object.values(gist.files)[0];
+    if (file && file.content) {
+      const parsed = JSON.parse(file.content);
+      data = { ...data, ...parsed };
+    }
+  } catch (e) {
+    console.error(e);
+    alert("同步失败：" + e.message);
+  }
+}
+
+async function syncToGist() {
+  const { token, gistId } = getSettings();
+  if (!token || !gistId) return;
+  try {
+    await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: "PATCH",
+      headers: { Authorization: `token ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+      body: JSON.stringify({ files: { "data.json": { content: JSON.stringify(data, null, 2) } } })
+    });
+  } catch (e) { console.error(e); }
+}
+
+function switchTab(tab) {
+  ["dashboard","clock","ai","projects","tasks"].forEach(t => {
+    document.getElementById("page-" + t).classList.add("hidden");
+    const btn = document.getElementById("tab-" + t);
+    btn.classList.remove("border-b-2", "border-blue-500", "font-medium");
+    btn.classList.add("text-zinc-400");
+  });
+  document.getElementById("page-" + tab).classList.remove("hidden");
+  const active = document.getElementById("tab-" + tab);
+  active.classList.add("border-b-2", "border-blue-500", "font-medium");
+  active.classList.remove("text-zinc-400");
+  renderAll();
+}
+
+function renderAll() {
+  const c = data.clock || {};
+  document.getElementById("dash-clock").textContent = c.in && !c.out ? "已上班" : (c.out ? "已下班" : "未打卡");
+
+  const soon = (data.ai_subscriptions || []).filter(a => {
+    if (!a.reset) return false;
+    const days = (new Date(a.reset) - new Date()) / 86400000;
+    return days >= 0 && days <= 7;
+  });
+  document.getElementById("dash-ai").innerHTML = soon.length ? soon.map(a => `${a.name} ${Math.ceil((new Date(a.reset)-new Date())/86400000)}天后重置`).join("<br>") : "无近期提醒";
+
+  document.getElementById("dash-projects").innerHTML = (data.projects || []).slice(0,3).map(p => p.name).join("<br>") || "暂无";
+
+  document.getElementById("clock-status").textContent = c.in && !c.out ? `已于 ${new Date(c.in).toLocaleTimeString()} 上班` : (c.out ? "今日已下班" : "当前未打卡");
+
+  document.getElementById("ai-list").innerHTML = (data.ai_subscriptions || []).map((a, i) => {
+    const remain = (a.total || 0) - (a.used || 0);
+    const days = a.reset ? Math.ceil((new Date(a.reset) - new Date()) / 86400000) : null;
+    return `<div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 text-sm">
+      <div class="flex justify-between"><span class="font-medium">${a.name}</span><button onclick="delAI(${i})" class="text-red-400 text-xs">删除</button></div>
+      <div class="text-zinc-400 text-xs mt-1">已用 ${a.used||0} / ${a.total||0}　剩余 ${remain}　${days!==null?`还剩 ${days} 天`:''}</div>
+    </div>`;
+  }).join("") || '<div class="text-zinc-500 text-sm">还没有添加 AI 服务</div>';
+
+  document.getElementById("project-list").innerHTML = (data.projects || []).map((p, i) => `
+    <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2 text-sm">
+      <div class="flex justify-between"><input value="${p.name||''}" onchange="updateProject(${i},'name',this.value)" class="bg-transparent font-medium border-b border-transparent focus:border-blue-500 outline-none"><button onclick="delProject(${i})" class="text-red-400 text-xs">删除</button></div>
+      <input value="${p.status||''}" onchange="updateProject(${i},'status',this.value)" placeholder="当前状态" class="w-full bg-zinc-800 rounded px-2 py-1 text-xs">
+      <textarea onchange="updateProject(${i},'last',this.value)" placeholder="上次进度" class="w-full bg-zinc-800 rounded px-2 py-1 text-xs" rows="2">${p.last||''}</textarea>
+      <textarea onchange="updateProject(${i},'next',this.value)" placeholder="下一步" class="w-full bg-zinc-800 rounded px-2 py-1 text-xs" rows="2">${p.next||''}</textarea>
+    </div>
+  `).join("") || '<div class="text-zinc-500 text-sm">还没有项目</div>';
+
+  document.getElementById("task-list").innerHTML = (data.tasks || []).map((t, i) => `
+    <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-3 flex items-center gap-3 text-sm">
+      <input type="checkbox" ${t.done?'checked':''} onchange="toggleTask(${i})">
+      <span class="${t.done?'line-through text-zinc-500':''}">${t.text}</span>
+      <button onclick="delTask(${i})" class="ml-auto text-red-400 text-xs">删除</button>
+    </div>
+  `).join("") || '<div class="text-zinc-500 text-sm">暂无任务</div>';
+}
+
+async function clockIn() {
+  data.clock = data.clock || {};
+  data.clock.in = new Date().toISOString();
+  data.clock.out = null;
+  await syncToGist();
+  renderAll();
+}
+async function clockOut() {
+  data.clock = data.clock || {};
+  data.clock.out = new Date().toISOString();
+  data.clock.summary = document.getElementById("clock-summary").value;
+  const hours = data.clock.in ? ((new Date(data.clock.out) - new Date(data.clock.in)) / 3600000).toFixed(2) : 0;
+  data.daily_logs = data.daily_logs || [];
+  data.daily_logs.push({ date: new Date().toISOString().slice(0,10), hours: +hours, summary: data.clock.summary });
+  await syncToGist();
+  renderAll();
+}
+
+async function addAI() {
+  const name = document.getElementById("ai-name").value.trim();
+  if (!name) return;
+  data.ai_subscriptions = data.ai_subscriptions || [];
+  data.ai_subscriptions.push({
+    name,
+    total: +document.getElementById("ai-total").value || 0,
+    used: +document.getElementById("ai-used").value || 0,
+    reset: document.getElementById("ai-reset").value
+  });
+  await syncToGist();
+  renderAll();
+}
+function delAI(i) { data.ai_subscriptions.splice(i,1); syncToGist(); renderAll(); }
+
+async function addProject() {
+  const name = document.getElementById("proj-name").value.trim();
+  if (!name) return;
+  data.projects = data.projects || [];
+  data.projects.push({ name, status: "进行中", last: "", next: "" });
+  document.getElementById("proj-name").value = "";
+  await syncToGist();
+  renderAll();
+}
+function updateProject(i, field, val) { data.projects[i][field] = val; syncToGist(); }
+function delProject(i) { data.projects.splice(i,1); syncToGist(); renderAll(); }
+
+async function addTask() {
+  const text = document.getElementById("task-input").value.trim();
+  if (!text) return;
+  data.tasks = data.tasks || [];
+  data.tasks.push({ text, done: false });
+  document.getElementById("task-input").value = "";
+  await syncToGist();
+  renderAll();
+}
+function toggleTask(i) { data.tasks[i].done = !data.tasks[i].done; syncToGist(); renderAll(); }
+function delTask(i) { data.tasks.splice(i,1); syncToGist(); renderAll(); }
+
+(async () => {
+  const s = getSettings();
+  if (s.token) document.getElementById("token").value = s.token;
+  if (s.gistId) document.getElementById("gist-id").value = s.gistId;
+  if (s.token && s.gistId) await syncFromGist();
+  renderAll();
+})();
+</script>
+</body>
+</html>
