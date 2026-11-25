@@ -53,6 +53,45 @@ def test_clock_out_without_clock_in_conflicts(client):
     assert resp.status_code == 409
 
 
+def test_clock_out_across_midnight(client, db_path):
+    """昨晚上班、过了零点再下班：要能正常下班，且今日页显示为上班中。"""
+    import sqlite3
+
+    client.post("/api/clock/in", json={"plan": "通宵"})
+    yesterday = (TODAY - timedelta(days=1)).isoformat()
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE work_sessions SET date = ?, clock_in = ?", (yesterday, f"{yesterday}T22:00:00")
+        )
+
+    today = client.get("/api/today").json()
+    assert today["work"]["clocked_in"] is True
+    assert client.post("/api/clock/in", json={}).status_code == 409
+
+    out = client.post("/api/clock/out", json={"summary": "收工"})
+    assert out.status_code == 200
+    assert out.json()["worked_minutes"] >= 120
+
+    # 下班后今日页仍然认得这段：状态是「已下班」，计划还在，工时只算零点之后
+    after = client.get("/api/today").json()
+    assert after["work"]["clocked_in"] is False
+    assert [s["plan"] for s in after["work"]["sessions"]] == ["通宵"]
+    from datetime import datetime
+    since_midnight = (datetime.now() - datetime.combine(TODAY, datetime.min.time())).total_seconds() // 60
+    assert 0 <= after["work"]["worked_minutes"] <= since_midnight + 1
+
+
+def test_shots_rejects_sibling_dir(client, config):
+    """screenshots_evil/ 这类前缀相同的目录不能被读到。"""
+    evil = config.screenshots_dir.parent / (config.screenshots_dir.name + "_evil")
+    evil.mkdir(parents=True)
+    (evil / "x.png").write_bytes(b"x")
+    config.screenshots_dir.mkdir(parents=True, exist_ok=True)
+    # 用 %2e%2e 编码，避免 HTTP 客户端提前把 ../ 规范化掉，确保真的打到 /shots 路由
+    resp = client.get(f"/shots/%2e%2e/{evil.name}/x.png")
+    assert resp.status_code == 404
+
+
 def test_sessions_by_date(client):
     client.post("/api/clock/in", json={"plan": "a"})
     client.post("/api/clock/out", json={"summary": "b"})
@@ -216,3 +255,39 @@ def test_today_shows_active_projects_only(client):
     client.patch(f"/api/projects/{paused['id']}", json={"status": "paused"})
     data = client.get("/api/today").json()
     assert [p["id"] for p in data["projects"]] == [active["id"]]
+
+
+# ---------------------------------------------------------------- 日历
+def test_calendar_expands_repeat_and_deadlines(client):
+    start = TODAY
+    client.post("/api/tasks", json={"title": "日报", "due_date": TODAY_STR, "repeat": "daily"})
+    client.post("/api/tasks", json={"title": "一次性", "due_date": TODAY_STR})
+    client.post("/api/projects", json={"name": "P", "deadline": (TODAY + timedelta(days=3)).isoformat()})
+    client.post("/api/clock/in", json={})
+
+    end = start + timedelta(days=6)
+    data = client.get(f"/api/calendar?start={start}&end={end}").json()
+    days = data["days"]
+
+    first = {t["title"]: t for t in days[TODAY_STR]["tasks"]}
+    assert set(first) == {"日报", "一次性"}
+    assert first["日报"]["virtual"] is False
+    later = days[(TODAY + timedelta(days=2)).isoformat()]["tasks"]
+    assert [t["title"] for t in later] == ["日报"] and later[0]["virtual"] is True
+    assert days[(TODAY + timedelta(days=3)).isoformat()]["deadlines"][0]["name"] == "P"
+    assert TODAY_STR in days and days[TODAY_STR]["minutes"] >= 0
+
+
+def test_calendar_rejects_bad_range(client):
+    assert client.get(f"/api/calendar?start={TODAY}&end={TODAY - timedelta(days=1)}").status_code == 400
+    assert client.get(f"/api/calendar?start={TODAY}&end={TODAY + timedelta(days=90)}").status_code == 400
+
+
+def test_parallel_requests_no_thread_error(client):
+    """并发请求时 yield 依赖跨线程 commit 不能报错（M1 时前端项目页会 500）。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    pid = client.post("/api/projects", json={"name": "P"}).json()["id"]
+    with ThreadPoolExecutor(8) as pool:
+        codes = list(pool.map(lambda _: client.get(f"/api/projects/{pid}/logs").status_code, range(40)))
+    assert set(codes) == {200}

@@ -33,7 +33,9 @@ def connect(db_path: Path | str) -> Iterator[sqlite3.Connection]:
     """打开连接，正常结束自动 commit，异常自动 rollback。"""
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=10)
+    # FastAPI 的 yield 依赖可能在不同线程里打开和关闭（commit）同一个连接，
+    # 所以关闭同线程检查；每个请求独占一个连接，不会被并发使用。
+    conn = sqlite3.connect(str(path), timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")  # 每个连接都要单独开
     try:

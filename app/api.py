@@ -253,11 +253,21 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     def today(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """今日汇总：打卡状态 + 任务分组 + 进行中项目 + 今日截图数。"""
         day = dbm.today_str()
+        # 与今天有交集的 session：今天开始的、昨晚开始今天才下班的、还没下班的。
+        # 不管开着还是已关闭都一样纳入，下班前后今日页不会跳变。
+        day_start = f"{day}T00:00:00"
         sessions = dbm.all_(
-            conn, "SELECT * FROM work_sessions WHERE date = ? ORDER BY clock_in", (day,)
+            conn,
+            """SELECT * FROM work_sessions
+               WHERE date = ? OR clock_out IS NULL OR clock_out >= ?
+               ORDER BY clock_in""",
+            (day, day_start),
         )
-        open_session = next((s for s in sessions if not s.get("clock_out")), None)
-        worked = sum(_session_minutes(s) for s in sessions)
+        open_session = next((s for s in reversed(sessions) if not s.get("clock_out")), None)
+        # 今日工时只算落在今天的那部分（跨零点的 session 按零点切开）
+        worked = sum(
+            _session_minutes({**s, "clock_in": max(s["clock_in"], day_start)}) for s in sessions
+        )
 
         # 任务分组：逾期 / 今天到期 / 高优先级（未在上一组里出现过的）
         open_tasks = [
@@ -318,9 +328,8 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     def clock_in(body: ClockIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """上班打卡：创建一段 work_session，记录「今天三件事」。"""
         day = dbm.today_str()
-        running = dbm.one(
-            conn, "SELECT * FROM work_sessions WHERE date = ? AND clock_out IS NULL", (day,)
-        )
+        # 不按日期过滤：昨晚没下班的 session 也算进行中，避免跨零点后重复上班
+        running = dbm.one(conn, "SELECT * FROM work_sessions WHERE clock_out IS NULL")
         if running:
             raise HTTPException(status_code=409, detail="今天已经上班打卡了，先下班再重新上班")
 
@@ -334,11 +343,10 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     @app.post("/api/clock/out", tags=["打卡"])
     def clock_out(body: ClockOut, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """下班打卡：结束当前未关闭的 session，写入总结。"""
-        day = dbm.today_str()
+        # 不按日期过滤：支持跨零点下班（如 22:00 上班、次日 01:00 下班）
         running = dbm.one(
             conn,
-            "SELECT * FROM work_sessions WHERE date = ? AND clock_out IS NULL ORDER BY clock_in DESC",
-            (day,),
+            "SELECT * FROM work_sessions WHERE clock_out IS NULL ORDER BY clock_in DESC",
         )
         if not running:
             raise HTTPException(status_code=409, detail="当前没有进行中的打卡，请先上班打卡")
@@ -392,7 +400,7 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
         """按相对路径返回本地截图；路径必须落在 screenshots/ 内。"""
         base = Path(app.state.config.screenshots_dir).resolve()
         target = (base / rel_path).resolve()
-        if not str(target).startswith(str(base)) or not target.is_file():
+        if not target.is_relative_to(base) or not target.is_file():
             raise HTTPException(status_code=404, detail="截图不存在")
         return FileResponse(target)
 
@@ -567,6 +575,63 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
         if log["project_id"] != project_id:
             raise HTTPException(status_code=404, detail="日志不属于该项目")
         dbm.delete(conn, "project_logs", log_id)
+
+    # ------------------------------------------------------------ 日历
+    @app.get("/api/calendar", tags=["日历"])
+    def calendar_view(
+        start: date_cls = Query(description="起始日期（含）"),
+        end: date_cls = Query(description="结束日期（含），最多 62 天"),
+        conn: sqlite3.Connection = Depends(get_conn),
+    ) -> dict[str, Any]:
+        """按天汇总：任务（含重复任务的后续日期）、项目截止日、打卡时长、截图数。"""
+        if end < start or (end - start).days > 62:
+            raise HTTPException(status_code=400, detail="日期范围无效（最多 62 天）")
+        s, e = start.isoformat(), end.isoformat()
+        days: dict[str, dict[str, Any]] = {}
+
+        def day(d: str) -> dict[str, Any]:
+            return days.setdefault(
+                d, {"tasks": [], "deadlines": [], "minutes": 0, "shots": 0}
+            )
+
+        # 任务：未完成的按 due_date；重复任务往后展开（标记 virtual，不可直接勾选）
+        for t in dbm.all_(conn, "SELECT * FROM tasks WHERE due_date IS NOT NULL ORDER BY due_time, priority"):
+            t = _task_out(t)
+            if t["done"]:
+                if s <= t["due_date"] <= e:
+                    day(t["due_date"])["tasks"].append(t)
+                continue
+            due = t["due_date"]
+            first = True
+            while due and due <= e:
+                if due >= s:
+                    day(due)["tasks"].append({**t, "due_date": due, "virtual": not first})
+                if t["repeat"] == "none":
+                    break
+                due = advance_due(due, t["repeat"])
+                first = False
+
+        for p in dbm.all_(
+            conn,
+            "SELECT id, name, status, progress, deadline FROM projects WHERE deadline BETWEEN ? AND ?",
+            (s, e),
+        ):
+            day(p["deadline"])["deadlines"].append(p)
+
+        for sess in dbm.all_(
+            conn, "SELECT * FROM work_sessions WHERE date BETWEEN ? AND ?", (s, e)
+        ):
+            day(sess["date"])["minutes"] += _session_minutes(sess)
+
+        for row in dbm.all_(
+            conn,
+            """SELECT substr(taken_at, 1, 10) AS d, COUNT(*) AS n FROM screenshots
+               WHERE taken_at >= ? AND taken_at < ? GROUP BY d""",
+            (f"{s}T00:00:00", f"{(end + timedelta(days=1)).isoformat()}T00:00:00"),
+        ):
+            day(row["d"])["shots"] = row["n"]
+
+        return {"start": s, "end": e, "days": days}
 
     # ------------------------------------------------------------ 前端静态文件
     web_dir = Path(__file__).resolve().parent / "web"
