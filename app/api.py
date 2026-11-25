@@ -253,16 +253,21 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     def today(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """今日汇总：打卡状态 + 任务分组 + 进行中项目 + 今日截图数。"""
         day = dbm.today_str()
+        # 与今天有交集的 session：今天开始的、昨晚开始今天才下班的、还没下班的。
+        # 不管开着还是已关闭都一样纳入，下班前后今日页不会跳变。
+        day_start = f"{day}T00:00:00"
         sessions = dbm.all_(
-            conn, "SELECT * FROM work_sessions WHERE date = ? ORDER BY clock_in", (day,)
+            conn,
+            """SELECT * FROM work_sessions
+               WHERE date = ? OR clock_out IS NULL OR clock_out >= ?
+               ORDER BY clock_in""",
+            (day, day_start),
         )
-        # 进行中的 session 可能是昨天开始的（跨零点），单独查
-        open_session = dbm.one(
-            conn, "SELECT * FROM work_sessions WHERE clock_out IS NULL ORDER BY clock_in DESC"
+        open_session = next((s for s in reversed(sessions) if not s.get("clock_out")), None)
+        # 今日工时只算落在今天的那部分（跨零点的 session 按零点切开）
+        worked = sum(
+            _session_minutes({**s, "clock_in": max(s["clock_in"], day_start)}) for s in sessions
         )
-        if open_session and open_session["date"] != day:
-            sessions = [open_session, *sessions]
-        worked = sum(_session_minutes(s) for s in sessions)
 
         # 任务分组：逾期 / 今天到期 / 高优先级（未在上一组里出现过的）
         open_tasks = [

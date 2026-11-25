@@ -72,6 +72,14 @@ def test_clock_out_across_midnight(client, db_path):
     assert out.status_code == 200
     assert out.json()["worked_minutes"] >= 120
 
+    # 下班后今日页仍然认得这段：状态是「已下班」，计划还在，工时只算零点之后
+    after = client.get("/api/today").json()
+    assert after["work"]["clocked_in"] is False
+    assert [s["plan"] for s in after["work"]["sessions"]] == ["通宵"]
+    from datetime import datetime
+    since_midnight = (datetime.now() - datetime.combine(TODAY, datetime.min.time())).total_seconds() // 60
+    assert 0 <= after["work"]["worked_minutes"] <= since_midnight + 1
+
 
 def test_shots_rejects_sibling_dir(client, config):
     """screenshots_evil/ 这类前缀相同的目录不能被读到。"""
@@ -79,7 +87,8 @@ def test_shots_rejects_sibling_dir(client, config):
     evil.mkdir(parents=True)
     (evil / "x.png").write_bytes(b"x")
     config.screenshots_dir.mkdir(parents=True, exist_ok=True)
-    resp = client.get(f"/shots/../{evil.name}/x.png")
+    # 用 %2e%2e 编码，避免 HTTP 客户端提前把 ../ 规范化掉，确保真的打到 /shots 路由
+    resp = client.get(f"/shots/%2e%2e/{evil.name}/x.png")
     assert resp.status_code == 404
 
 
