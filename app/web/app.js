@@ -131,6 +131,7 @@ const state = {
   calMonth: null,      // Date，当月 1 号
   calSelected: null,   // YYYY-MM-DD
   calData: null,
+  sched: null,         // /api/scheduler/status
 };
 
 /* ---------------------------------------------------------------- 导航 */
@@ -150,6 +151,71 @@ async function loadToday() {
   await guard(async () => {
     state.today = await call('GET', '/api/today');
     renderToday();
+  });
+  await loadSchedulerStatus();
+}
+
+/* 截图调度状态：侧边栏的「下一张截图 / 暂停」都靠它 */
+async function loadSchedulerStatus() {
+  await guard(async () => {
+    state.sched = await call('GET', '/api/scheduler/status');
+    renderSched();
+  });
+}
+
+function renderSched() {
+  const sched = state.sched;
+  const hint = $('#shot-hint');
+  const pauseBtn = $('#btn-shot-pause');
+  const nowBtn = $('#btn-shot-now');
+
+  if (!sched || !sched.running) {
+    hint.textContent = '后台调度未运行（只用 --no-tray 调试时正常）';
+    hint.className = 'shot-hint off';
+    pauseBtn.textContent = '暂停 1 小时';
+    pauseBtn.disabled = true;
+    nowBtn.disabled = false;  // 手动截图仍然可用
+    return;
+  }
+
+  pauseBtn.disabled = false;
+  nowBtn.disabled = false;
+
+  if (sched.screenshot_paused_until) {
+    hint.textContent = `截图已暂停 · ${hhmm(sched.screenshot_paused_until)} 恢复`;
+    hint.className = 'shot-hint paused';
+    pauseBtn.textContent = '恢复截图';
+    return;
+  }
+
+  pauseBtn.textContent = '暂停 1 小时';
+  hint.className = 'shot-hint';
+  if (sched.next_shot_in_minutes === null) {
+    hint.textContent = '上班后才自动截图';
+  } else if (sched.next_shot_in_minutes === 0) {
+    hint.textContent = '下一张截图：马上';
+  } else {
+    hint.textContent = `下一张截图：${sched.next_shot_in_minutes} 分钟后`;
+  }
+}
+
+async function togglePauseShots() {
+  const paused = !!(state.sched && state.sched.screenshot_paused_until);
+  await guard(async () => {
+    state.sched = await call('POST', '/api/screenshots/pause', { minutes: paused ? 0 : 60 });
+    renderSched();
+    toast(paused ? '已恢复自动截图' : '截图暂停 1 小时');
+  });
+}
+
+async function captureNow() {
+  await guard(async () => {
+    const data = await call('POST', '/api/screenshots/capture');
+    toast(data.ok ? '已截图' : data.message, !data.ok);
+    if (data.ok) {
+      await loadToday();
+      if (state.tab === 'records') loadRecords();
+    }
   });
 }
 
@@ -519,15 +585,21 @@ async function loadRecords() {
 
     $('#record-shots').innerHTML = shots.length
       ? shots.map((s) => `
-          <div class="shot">
-            <a href="/shots/${encodeURI(s.path)}" target="_blank">
-              <img src="/shots/${encodeURI(s.path)}" alt="${s.taken_at}" loading="lazy" />
-            </a>
+          <div class="shot" data-src="/shots/${encodeURI(s.path)}" data-time="${hhmm(s.taken_at)}">
+            <img src="/shots/${encodeURI(s.path)}" alt="${s.taken_at}" loading="lazy" />
             <span>${hhmm(s.taken_at)}</span>
           </div>
         `).join('')
-      : '<div class="empty">这一天没有截图（自动截图从 M2 开始）。</div>';
+      : '<div class="empty">这一天没有截图。上班期间会按间隔自动截，也可以点侧边栏「立即截图」。</div>';
   });
+}
+
+/* 点开看大图 */
+function showShot(src, label) {
+  const dlg = $('#shot-dialog');
+  $('#shot-img').src = src;
+  $('#shot-dialog-title').textContent = label ? `截图 · ${label}` : '截图';
+  if (!dlg.open) dlg.showModal();
 }
 
 /* ---------------------------------------------------------------- 日历 */
@@ -692,6 +764,16 @@ async function boot() {
   });
 
   $('#record-date').addEventListener('change', loadRecords);
+
+  $('#btn-shot-pause').addEventListener('click', togglePauseShots);
+  $('#btn-shot-now').addEventListener('click', captureNow);
+  $('#shot-close').addEventListener('click', () => $('#shot-dialog').close());
+  $('#record-shots').addEventListener('click', (event) => {
+    const cell = event.target.closest('.shot');
+    if (cell) showShot(cell.dataset.src, cell.dataset.time);
+  });
+  // 定时刷新倒计时，不用整页重画
+  setInterval(loadSchedulerStatus, 60000);
 
   bindTaskActions($('#task-list'));
   bindTaskActions($('#today-tasks'));

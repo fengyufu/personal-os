@@ -7,6 +7,9 @@
     POST   /api/clock/out         {summary}
     GET    /api/sessions          ?date=YYYY-MM-DD
     GET    /api/screenshots       ?date=YYYY-MM-DD
+    POST   /api/screenshots/capture  立即截图
+    POST   /api/screenshots/pause    {minutes}
+    GET    /api/scheduler/status
     GET    /shots/<path>          本地截图文件（不上传云端）
     CRUD   /api/tasks
     CRUD   /api/projects  +  /api/projects/{id}/logs
@@ -25,7 +28,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import __version__, db as dbm
+from . import __version__, db as dbm, screenshot, services
 from .config import Config, load_config
 
 # ================================================================ 依赖
@@ -154,6 +157,10 @@ class ProjectLogIn(_Base):
         return _blank_to_none(value)
 
 
+class PauseIn(_Base):
+    minutes: int = Field(default=60, ge=0, le=1440, description="0 表示恢复截图")
+
+
 # ================================================================ 小工具
 def _dump(model: BaseModel) -> dict[str, Any]:
     """取显式传入的字段；日期转成 ISO 字符串，布尔转 0/1 存库。"""
@@ -180,13 +187,11 @@ def _project_out(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _session_minutes(session: dict[str, Any], until: datetime | None = None) -> int:
-    """一段打卡的实际时长（分钟）；未下班则算到现在。"""
-    start = datetime.fromisoformat(session["clock_in"])
-    if session.get("clock_out"):
-        end = datetime.fromisoformat(session["clock_out"])
-    else:
-        end = until or datetime.now()
-    return max(0, int((end - start).total_seconds() // 60))
+    """一段打卡的实际时长（分钟）；未下班则算到现在。
+
+    实现放在 services.py，托盘和 API 共用同一套计算。
+    """
+    return services.session_minutes(session, until)
 
 
 def advance_due(due_date: str | None, repeat: str) -> str | None:
@@ -236,6 +241,9 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     )
     app.state.config = cfg
     app.state.db_path = dbp
+    # 调度器由 main.py 注入（app.state.scheduler = Scheduler(...)）；
+    # create_app() 故意不启动它，否则测试会真的去截图。
+    app.state.scheduler = None
 
     # ------------------------------------------------------------ 基础
     @app.get("/api/health", tags=["基础"])
@@ -327,39 +335,18 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
     @app.post("/api/clock/in", tags=["打卡"], status_code=201)
     def clock_in(body: ClockIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """上班打卡：创建一段 work_session，记录「今天三件事」。"""
-        day = dbm.today_str()
-        # 不按日期过滤：昨晚没下班的 session 也算进行中，避免跨零点后重复上班
-        running = dbm.one(conn, "SELECT * FROM work_sessions WHERE clock_out IS NULL")
-        if running:
-            raise HTTPException(status_code=409, detail="今天已经上班打卡了，先下班再重新上班")
-
-        session_id = dbm.insert(
-            conn,
-            "work_sessions",
-            {"date": day, "clock_in": dbm.now_iso(), "plan": body.plan},
-        )
-        return dbm.get(conn, "work_sessions", session_id) or {}
+        try:
+            return services.clock_in(conn, body.plan)
+        except services.ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/clock/out", tags=["打卡"])
     def clock_out(body: ClockOut, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         """下班打卡：结束当前未关闭的 session，写入总结。"""
-        # 不按日期过滤：支持跨零点下班（如 22:00 上班、次日 01:00 下班）
-        running = dbm.one(
-            conn,
-            "SELECT * FROM work_sessions WHERE clock_out IS NULL ORDER BY clock_in DESC",
-        )
-        if not running:
-            raise HTTPException(status_code=409, detail="当前没有进行中的打卡，请先上班打卡")
-
-        dbm.update(
-            conn,
-            "work_sessions",
-            running["id"],
-            {"clock_out": dbm.now_iso(), "summary": body.summary},
-        )
-        session = dbm.get(conn, "work_sessions", running["id"]) or {}
-        session["worked_minutes"] = _session_minutes(session)
-        return session
+        try:
+            return services.clock_out(conn, body.summary)
+        except services.ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/sessions", tags=["打卡"])
     def list_sessions(
@@ -403,6 +390,43 @@ def create_app(config: Config | None = None, db_path: str | Path | None = None) 
         if not target.is_relative_to(base) or not target.is_file():
             raise HTTPException(status_code=404, detail="截图不存在")
         return FileResponse(target)
+
+    # ------------------------------------------------------------ 截图 / 调度器
+    @app.get("/api/scheduler/status", tags=["截图"])
+    def scheduler_status() -> dict[str, Any]:
+        """调度器状态；测试里没有调度器时 running=false。"""
+        sched = getattr(app.state, "scheduler", None)
+        if sched is None:
+            return {
+                "running": False,
+                "screenshot_paused_until": None,
+                "last_shot_at": None,
+                "next_shot_in_minutes": None,
+                "last_tick_at": None,
+                "last_error": None,
+            }
+        return sched.status()
+
+    @app.post("/api/screenshots/capture", tags=["截图"])
+    def capture_now(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
+        """立即截图。忽略暂停和「无变化」，但锁屏 / 隐私窗口仍然跳过。"""
+        sched = getattr(app.state, "scheduler", None)
+        result = screenshot.capture(
+            conn,
+            cfg,
+            force=True,
+            paused_until=getattr(sched, "paused_until", None),
+        )
+        return result.as_dict()
+
+    @app.post("/api/screenshots/pause", tags=["截图"])
+    def pause_screenshots(body: PauseIn) -> dict[str, Any]:
+        """暂停 / 恢复自动截图；minutes=0 恢复。"""
+        sched = getattr(app.state, "scheduler", None)
+        if sched is None:
+            raise HTTPException(status_code=409, detail="调度器没有运行，无法暂停截图")
+        sched.pause(body.minutes)
+        return sched.status()
 
     # ------------------------------------------------------------ 任务
     @app.get("/api/tasks", tags=["任务"])

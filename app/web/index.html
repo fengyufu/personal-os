@@ -25,6 +25,13 @@
     <div class="sidebar-foot">
       <div class="punch-state" id="punch-state">未上班</div>
       <button class="btn btn-primary btn-block" id="btn-punch">上班打卡</button>
+      <div class="shot-box">
+        <div class="shot-hint" id="shot-hint">自动截图未启动</div>
+        <div class="shot-actions">
+          <button class="link" id="btn-shot-now">立即截图</button>
+          <button class="link" id="btn-shot-pause">暂停 1 小时</button>
+        </div>
+      </div>
     </div>
   </aside>
 
@@ -208,6 +215,16 @@
 </dialog>
 
 <div class="toast" id="toast"></div>
+
+<!-- 截图大图 -->
+<dialog id="shot-dialog" class="shot-dialog">
+  <div class="shot-dialog-head">
+    <h2 id="shot-dialog-title">截图</h2>
+    <button class="btn btn-sm" id="shot-close">关闭</button>
+  </div>
+  <img id="shot-img" alt="截图" />
+</dialog>
+
 <script src="/app.js"></script>
 </body>
 </html>
